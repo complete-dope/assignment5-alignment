@@ -59,22 +59,34 @@ def evaluate_vllm(
     Evaluate a language model on a list of prompts,
     compute evaluation metrics, and serialize results to disk.
     """
+
+    for prompt in prompts:
+        generated_output = vllm_model(prompt)
+
+
+
     pass
 
 
-# loop 
-for idx,prompt in enumerate(dataset):
-    output = llm.generate(prompt, sampling_params)
-    print(f'{idx}th output is {output}')
+def reward_fn(output, generated_output):
+    pass
+
+# # loop 
+# for idx,prompt in enumerate(dataset):
+#     output = llm.generate(prompt, sampling_params)
+#     print(f'{idx}th output is {output}')
     
-    # now evaluate and save 
-    eval_answer = evaluate_vllm()
+#     # now evaluate and save 
+#     eval_answer = evaluate_vllm()
 
-    store_response = {'question':prompt , 'output':output, 'ground_truth':answer_points[idx], 'eval':eval_answer} 
+#     store_response = {'question':prompt , 'output':output, 'ground_truth':answer_points[idx], 'eval':eval_answer} 
 
-    log_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/math_baseline_output.jsonl')
-    save_to_jsonl_file_in_streaming_manner(file_path = log_path, data = store_response, to_continue = True)
+#     log_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/math_baseline_output.jsonl')
+#     save_to_jsonl_file_in_streaming_manner(file_path = log_path, data = store_response, to_continue = True)
     
 
 
 
+def tokenize_prompt_and_output(prompt_strs, output_strs, tokenizer):
+
+    tokenzier
