@@ -13,8 +13,6 @@ from torch.nn import functional as F
 from torch.nn.functional import softmax
 from einops import einsum, rearrange, repeat
 
-
-
 def simple_task():
     '''
     # task : sorting n numbers of a model
@@ -59,8 +57,93 @@ def simple_model():
 
     prompts = torch.tensor(data = [[1,0,2]]) # batch,pos
 
-     
-    pass
+    torch.manual_seed(10)
+    responses = generate_responses(prompts)
+
+    rewards = compute_reward(prompt=prompts, responses=responses, reward_fn = sort_inclusion_ordering_rewarding) # list[list[int]]
+
+    # now find the delta ( that is how much to take these rewards ... how much of these rewards to take)
+    # this delta term is called as temporal difference error aka advantage
+    # delta is element of suprise , okay reward is this but how much to take for that reward ?
+
+    deltas = compute_deltas(rewards, mode = 'normalized_rewards') # this is the one being used by grpo paper also paper also and is very easy to maintain 
+
+
+    # compute log probs for these responses
+    log_probs = compute_log_probs(prompts, responses, model) 
+
+    loss = compute_loss(log_probs , deltas, mode ='naive')
+
+    freezing_parameters()
+
+
+def freezing_parameters():
+    # Motivation: in GRPO you'll see ratios: p(a | s) / p_old(a | s)
+    # When you're optimizing, it is important to freeze and not differentiate through p_old
+    w = torch.tensor(2., requires_grad=True)
+    p = torch.nn.Sigmoid()(w)
+    p_old = torch.nn.Sigmoid()(w)
+    ratio = p / p_old
+    ratio.backward()
+    grad = w.grad  # @inspect grad
+    
+    # Do it properly:
+    w = torch.tensor(2., requires_grad=True)
+    p = torch.nn.Sigmoid()(w)
+    with torch.no_grad():  # Important: treat p_old as a constant!
+        p_old = torch.nn.Sigmoid()(w)
+    ratio = p / p_old
+    ratio.backward()
+    grad = w.grad  # @inspect grad
+
+
+def compute_loss(log_probs: torch.Tensor, deltas: torch.Tensor, mode: str, old_log_probs: torch.Tensor | None = None) -> torch.Tensor:
+    if mode == "naive":
+        return -einsum(log_probs, deltas, "batch trial pos, batch trial -> batch trial pos").mean() # multiply then together and then find the mean out from this 
+
+        # deltas get broadcasted to each position, this is done for the outcome based estimation
+        # for process rewarding the deltas are broadcasted till the new process (step) 
+
+    if mode == "unclipped":
+        ratios = log_probs / old_log_probs  # [batch trial]
+        return -einsum(ratios, deltas, "batch trial pos, batch trial -> batch trial pos").mean()
+    if mode == "clipped":
+        epsilon = 0.01
+        unclipped_ratios = log_probs / old_log_probs  # [batch trial]
+        unclipped = einsum(unclipped_ratios, deltas, "batch trial pos, batch trial -> batch trial pos")
+        clipped_ratios = torch.clamp(unclipped_ratios, min=1 - epsilon, max=1 + epsilon)
+        clipped = einsum(clipped_ratios, deltas, "batch trial pos, batch trial -> batch trial pos")
+        return -torch.minimum(unclipped, clipped).mean()
+    raise ValueError(f"Unknown mode: {mode}")
+
+
+
+def sort_inclusion_ordering_reward(prompt: list[int], response: list[int]) -> float:  # @inspect prompt, @inspect response
+    """
+    Return how close response is to ground_truth = sorted(prompt).
+    """
+    assert len(prompt) == len(response)
+    # Give one point for each token in the prompt that shows up in the response
+    inclusion_reward = sum(1 for x in prompt if x in response)  # @inspect inclusion_reward
+    # Give one point for each adjacent pair in response that's sorted
+    ordering_reward = sum(1 for x, y in zip(response, response[1:]) if x <= y)  # @inspect ordering_reward
+    return inclusion_reward + ordering_reward
+
+def compute_reward(prompts: torch.Tensor, responses: torch.Tensor, reward_fn: Callable[[list[int], list[int]], float]) -> torch.Tensor:
+    """
+    Args:
+        prompts (int[batch pos])
+        responses (int[batch trial pos])
+    Returns:
+        rewards (float[batch trial])
+    """
+    batch_size, num_responses, _ = responses.shape
+    rewards = torch.empty(batch_size, num_responses, dtype=torch.float32)
+    for i in range(batch_size):
+        for j in range(num_responses):
+            rewards[i, j] = reward_fn(prompts[i, :], responses[i, j, :])
+    return rewards
+
 
 
 class Model(nn.Module):
@@ -89,11 +172,6 @@ class Model(nn.Module):
         logits = einsum(decoded, self.embedding.weight , 'batch pos dim1 , vocab dim1 -> batch pos vocab')
 
         return logits
-
-
-from torch.nn import functional as F
-from torch.nn.functional import softmax
-from einops import einsum, rearrange, repeat
 
 def generate_responses(prompts: torch.Tensor, model: Model, num_responses: int) -> torch.Tensor:
     """
@@ -139,7 +217,6 @@ def compute_log_probs(prompts: torch.Tensor, responses: torch.Tensor, model: Mod
     # Index into log_probs using responses
     log_probs = log_probs.gather(dim=-1, index=responses.unsqueeze(-1)).squeeze(-1)  # [batch trial pos]
     return log_probs
-
 
 
 def compute_deltas(rewards: torch.Tensor, mode: str) -> torch.Tensor:  # @inspect rewards
